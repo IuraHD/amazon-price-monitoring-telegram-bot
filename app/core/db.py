@@ -30,6 +30,18 @@ CREATE TABLE IF NOT EXISTS price_history (
     ts TEXT NOT NULL,
     price REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS navigation_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    shortcut_used INTEGER NOT NULL DEFAULT 0,
+    context TEXT,
+    timestamp TEXT NOT NULL,
+    response_time_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_nav_events_timestamp ON navigation_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_nav_events_chat_id ON navigation_events(chat_id);
+CREATE INDEX IF NOT EXISTS idx_nav_events_shortcut ON navigation_events(shortcut_used);
 """
 
 
