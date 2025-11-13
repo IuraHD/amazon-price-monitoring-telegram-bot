@@ -24,11 +24,16 @@ Professional Telegram bot for tracking Amazon product prices with intelligent fo
 - **Auto-refresh graphs** sent with each notification
 
 ### 🎯 User-Friendly Interface
+- **Number-based shortcuts (NEW!)** – Press 1-9 for instant navigation and actions
+- **Pagination support** – Handle large lists with 9 items per page
+- **Smart context awareness** – Shortcuts adapt to current screen
+- **Visual feedback** – Confirmation messages for all actions
 - **Product name and clickable URL** displayed in detail view
-- **Beautiful inline keyboard menus** with emojis
-- **Intuitive navigation** with smart back buttons
+- **Beautiful inline keyboard menus** with numbered emojis (1️⃣-9️⃣)
+- **Intuitive navigation** with smart back buttons and tips
 - **FSM-based flows** for smooth user experience
 - **Clean chat management** (auto-deletes old graphs)
+- **Analytics tracking** – Monitor feature adoption and usage patterns
 
 ### ⚡ Performance
 - **Async HTTP fetching** (aiohttp) with retry/backoff and 3 attempts
@@ -70,10 +75,40 @@ python -m app.bot.bot
 ## 🎮 Usage
 
 ### Main Menu Options
-- **➕ Add Product** – Start tracking a new Amazon product
-- **📂 My Folders** – Manage your folder organization
-- **📦 All Products** – View all tracked products with total price
-- **🔄 Refresh All Prices** – Manually update all prices immediately
+- **1️⃣ Add Product** – Start tracking a new Amazon product
+- **2️⃣ My Folders** – Manage your folder organization
+- **3️⃣ All Products** – View all tracked products with total price
+- **4️⃣ Refresh All** – Manually update all prices immediately
+- **5️⃣ Settings** – Configure bot preferences (coming in Phase 2)
+
+**💡 Tip:** Simply press the number keys (1-5) for instant access!
+
+### Number-Based Shortcuts ⚡ (NEW!)
+
+Navigate faster with keyboard shortcuts throughout the bot:
+
+#### Main Menu (Press 1-5)
+- `1` – Add Product
+- `2` – My Folders
+- `3` – All Products
+- `4` – Refresh All Prices
+- `5` – Settings
+
+#### Product List (Press 1-9)
+- `1-9` – View product details (9 products per page)
+- Navigate between pages with Previous/Next buttons
+
+#### Folder List (Press 1-9)
+- `1-9` – Open folder and view contents
+- Supports pagination for 9+ folders
+
+#### Product Detail (Press 1-4)
+- `1` – Toggle price alerts ON/OFF
+- `2` – Refresh price now
+- `3` – Move to different folder
+- `4` – Remove from tracking
+
+**💡 All shortcuts work on both mobile and desktop Telegram!**
 
 ## 📱 Workflows
 
