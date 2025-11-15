@@ -86,3 +86,97 @@ def list_price_history(product_id: int):
         step = len(rows) // PRICE_SELECT_LIMIT
         rows = [r for i, r in enumerate(rows) if i % step == 0]
     return rows
+
+
+def search_products_by_name(chat_id: int, search_term: str) -> Sequence:
+    """Search products by name (case-insensitive)."""
+    return fetch_all("""
+        SELECT p.*, f.name as folder_name, f.emoji as folder_emoji
+        FROM products p
+        LEFT JOIN folders f ON p.folder_id = f.id
+        WHERE p.chat_id = ? AND LOWER(p.title) LIKE LOWER(?)
+        ORDER BY p.created_ts DESC
+    """, (chat_id, f"%{search_term}%"))
+
+
+def search_products_by_asin(chat_id: int, asin: str) -> Sequence:
+    """Search products by ASIN."""
+    return fetch_all("""
+        SELECT p.*, f.name as folder_name, f.emoji as folder_emoji
+        FROM products p
+        LEFT JOIN folders f ON p.folder_id = f.id
+        WHERE p.chat_id = ? AND p.asin LIKE ?
+        ORDER BY p.created_ts DESC
+    """, (chat_id, f"%{asin}%"))
+
+
+def filter_products_by_price_range(chat_id: int, min_price: float, max_price: float) -> Sequence:
+    """Filter products by price range."""
+    return fetch_all("""
+        SELECT p.*, f.name as folder_name, f.emoji as folder_emoji
+        FROM products p
+        LEFT JOIN folders f ON p.folder_id = f.id
+        WHERE p.chat_id = ? AND p.last_price IS NOT NULL 
+        AND p.last_price BETWEEN ? AND ?
+        ORDER BY p.last_price ASC
+    """, (chat_id, min_price, max_price))
+
+
+def get_products_statistics(chat_id: int) -> dict:
+    """Get statistics about tracked products."""
+    total_products = fetch_one("SELECT COUNT(*) as cnt FROM products WHERE chat_id = ?", (chat_id,))
+    total_with_price = fetch_one(
+        "SELECT COUNT(*) as cnt FROM products WHERE chat_id = ? AND last_price IS NOT NULL",
+        (chat_id,)
+    )
+    total_value = fetch_one(
+        "SELECT SUM(last_price) as total FROM products WHERE chat_id = ? AND last_price IS NOT NULL",
+        (chat_id,)
+    )
+    alerts_enabled = fetch_one(
+        "SELECT COUNT(*) as cnt FROM products WHERE chat_id = ? AND alerts_enabled = 1",
+        (chat_id,)
+    )
+    
+    return {
+        "total_products": total_products["cnt"] if total_products else 0,
+        "total_with_price": total_with_price["cnt"] if total_with_price else 0,
+        "total_value": total_value["total"] if total_value and total_value["total"] else 0.0,
+        "alerts_enabled": alerts_enabled["cnt"] if alerts_enabled else 0,
+    }
+
+
+def toggle_all_alerts(chat_id: int, enabled: bool) -> None:
+    """Toggle alerts for all products of a user."""
+    execute("UPDATE products SET alerts_enabled = ? WHERE chat_id = ?", (1 if enabled else 0, chat_id))
+
+
+def get_price_trends(chat_id: int) -> dict:
+    """Get products with recent price changes."""
+    # Get products with at least 2 price history entries
+    products = fetch_all("""
+        SELECT p.id, p.asin, p.title, p.last_price
+        FROM products p
+        WHERE p.chat_id = ? AND p.last_price IS NOT NULL
+    """, (chat_id,))
+    
+    decreased = []
+    increased = []
+    
+    for prod in products:
+        history = fetch_all(
+            "SELECT price FROM price_history WHERE product_id = ? ORDER BY ts DESC LIMIT 2",
+            (prod["id"],)
+        )
+        if len(history) >= 2:
+            current = history[0]["price"]
+            previous = history[1]["price"]
+            if current < previous:
+                decreased.append({**dict(prod), "change": previous - current})
+            elif current > previous:
+                increased.append({**dict(prod), "change": current - previous})
+    
+    return {
+        "decreased": decreased,
+        "increased": increased
+    }
