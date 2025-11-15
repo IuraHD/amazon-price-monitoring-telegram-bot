@@ -7,3 +7,8 @@ class AddTracking(StatesGroup):
 class CreateFolder(StatesGroup):
     waiting_for_name = State()
     waiting_for_emoji = State()
+
+class SearchProduct(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_asin = State()
+    waiting_for_price_range = State()

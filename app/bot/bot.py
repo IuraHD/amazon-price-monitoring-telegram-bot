@@ -3,6 +3,7 @@ import signal
 import structlog
 import aiohttp
 import html
+import datetime as dt
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
@@ -10,6 +11,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.core.config import load_settings
 from app.core.db import init_db, execute
@@ -25,6 +27,12 @@ from app.core.products import (
     remove_product,
     update_graph_message,
     update_title,
+    search_products_by_name,
+    search_products_by_asin,
+    filter_products_by_price_range,
+    get_products_statistics,
+    toggle_all_alerts,
+    get_price_trends,
 )
 from app.core.folders import (
     create_folder,
@@ -38,10 +46,11 @@ from app.core.folders import (
 from app.utils.fetch import fetch_price, extract_asin, resolve_asin, fetch_title
 from urllib.parse import urlparse
 from app.utils.graph import build_price_graph
-from .states import AddTracking, CreateFolder
+from .states import AddTracking, CreateFolder, SearchProduct
 from .keyboards import (
     main_menu, products_list, product_detail, add_tracking_menu,
     choose_folder_menu, folders_list_menu, folder_detail_menu,
+    settings_menu, search_menu, notification_settings_menu,
     MenuActions, ProductActions, FolderActions
 )
 
@@ -87,9 +96,15 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         "🛒 <b>Amazon Price Monitor Bot</b>\n\n"
-        "Track Amazon prices and get notified when they change!\n"
-        "Organize your products in folders for better management.\n\n"
-        "Select an option below:",
+        "Welcome to your personal Amazon price tracker! 🎯\n\n"
+        "✨ <b>What I can do:</b>\n"
+        "• 📊 Track unlimited Amazon products\n"
+        "• 🔔 Send price change notifications\n"
+        "• 📂 Organize products in folders\n"
+        "• 📈 Show price history graphs\n"
+        "• 🔍 Search and filter your products\n"
+        "• 💾 Export your product list\n\n"
+        "👇 Choose an option below to get started:",
         reply_markup=main_menu()
     )
 
@@ -156,6 +171,305 @@ async def cb_refresh_all(callback: CallbackQuery):
     await safe_answer(callback, "🔄 Refreshing all prices...", show_alert=True)
     await refresh_prices_once()
     await safe_edit(callback.message, "✅ All prices refreshed!", main_menu())
+
+
+# ================= New Menu Handlers =================
+
+@router.callback_query(MenuActions.filter(F.action == "help"))
+async def cb_help(callback: CallbackQuery):
+    help_text = (
+        "ℹ️ <b>Amazon Price Monitor Bot - Help</b>\n\n"
+        "<b>📊 Features:</b>\n"
+        "• Track Amazon product prices with automatic updates\n"
+        "• Organize products into custom folders\n"
+        "• Get notifications when prices change\n"
+        "• View price history graphs\n"
+        "• Search and filter your products\n"
+        "• Export your product list\n\n"
+        "<b>🚀 Quick Start:</b>\n"
+        "1. Click <b>➕ Add Product</b> to track a new item\n"
+        "2. Choose a folder or create one\n"
+        "3. Send the Amazon product URL\n"
+        "4. Get instant price tracking!\n\n"
+        "<b>📂 Folders:</b>\n"
+        "Organize your products with custom names and emojis\n\n"
+        "<b>🔔 Alerts:</b>\n"
+        "Enable/disable price change notifications per product\n\n"
+        "<b>📊 Statistics:</b>\n"
+        "View overview of all tracked products and trends\n\n"
+        "<b>🔍 Search:</b>\n"
+        "Find products by name, ASIN, or filter by price\n\n"
+        "<b>⚙️ Settings:</b>\n"
+        "Manage notifications and export data"
+    )
+    await safe_edit(callback.message, help_text, reply_markup=main_menu())
+    await safe_answer(callback)
+
+
+@router.callback_query(MenuActions.filter(F.action == "stats"))
+async def cb_stats(callback: CallbackQuery):
+    stats = get_products_statistics(callback.message.chat.id)
+    trends = get_price_trends(callback.message.chat.id)
+    
+    stats_text = (
+        f"📊 <b>Your Statistics</b>\n\n"
+        f"📦 Total Products: <b>{stats['total_products']}</b>\n"
+        f"💰 Products with Price: <b>{stats['total_with_price']}</b>\n"
+        f"💵 Total Value: <b>£{stats['total_value']:,.2f}</b>\n"
+        f"🔔 Alerts Enabled: <b>{stats['alerts_enabled']}</b>\n\n"
+    )
+    
+    if trends["decreased"]:
+        stats_text += f"📉 <b>Recent Price Drops ({len(trends['decreased'])}):</b>\n"
+        for prod in trends["decreased"][:5]:  # Show top 5
+            title = prod['title'][:30] + "..." if prod['title'] and len(prod['title']) > 30 else (prod['title'] or prod['asin'])
+            stats_text += f"  • {title} (-£{prod['change']:.2f})\n"
+        stats_text += "\n"
+    
+    if trends["increased"]:
+        stats_text += f"📈 <b>Recent Price Increases ({len(trends['increased'])}):</b>\n"
+        for prod in trends["increased"][:5]:  # Show top 5
+            title = prod['title'][:30] + "..." if prod['title'] and len(prod['title']) > 30 else (prod['title'] or prod['asin'])
+            stats_text += f"  • {title} (+£{prod['change']:.2f})\n"
+    
+    if not trends["decreased"] and not trends["increased"]:
+        stats_text += "📊 No recent price changes detected."
+    
+    await safe_edit(callback.message, stats_text, reply_markup=main_menu())
+    await safe_answer(callback)
+
+
+@router.callback_query(MenuActions.filter(F.action == "search"))
+async def cb_search(callback: CallbackQuery):
+    await safe_edit(
+        callback.message,
+        "🔍 <b>Search Products</b>\n\nChoose a search method:",
+        reply_markup=search_menu()
+    )
+    await safe_answer(callback)
+
+
+@router.callback_query(MenuActions.filter(F.action == "search_name"))
+async def cb_search_name(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(SearchProduct.waiting_for_name)
+    await safe_edit(
+        callback.message,
+        "🔤 <b>Search by Name</b>\n\nEnter product name to search:",
+        reply_markup=add_tracking_menu()
+    )
+    await safe_answer(callback)
+
+
+@router.callback_query(MenuActions.filter(F.action == "search_asin"))
+async def cb_search_asin(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(SearchProduct.waiting_for_asin)
+    await safe_edit(
+        callback.message,
+        "🏷️ <b>Search by ASIN</b>\n\nEnter ASIN to search:",
+        reply_markup=add_tracking_menu()
+    )
+    await safe_answer(callback)
+
+
+@router.callback_query(MenuActions.filter(F.action == "filter_price"))
+async def cb_filter_price(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(SearchProduct.waiting_for_price_range)
+    await safe_edit(
+        callback.message,
+        "💰 <b>Filter by Price</b>\n\nEnter price range (e.g., '10-50' or '0-100'):",
+        reply_markup=add_tracking_menu()
+    )
+    await safe_answer(callback)
+
+
+@router.callback_query(MenuActions.filter(F.action == "settings"))
+async def cb_settings(callback: CallbackQuery):
+    await safe_edit(
+        callback.message,
+        "⚙️ <b>Settings</b>\n\nManage your preferences:",
+        reply_markup=settings_menu()
+    )
+    await safe_answer(callback)
+
+
+@router.callback_query(MenuActions.filter(F.action == "notification_settings"))
+async def cb_notification_settings(callback: CallbackQuery):
+    products = list_products(callback.message.chat.id)
+    all_enabled = all(p['alerts_enabled'] for p in products) if products else False
+    
+    text = (
+        "🔔 <b>Notification Settings</b>\n\n"
+        f"Currently: <b>{'All alerts enabled' if all_enabled else 'Some alerts disabled'}</b>\n\n"
+        "Toggle to enable/disable alerts for all products at once."
+    )
+    
+    await safe_edit(
+        callback.message,
+        text,
+        reply_markup=notification_settings_menu(all_enabled)
+    )
+    await safe_answer(callback)
+
+
+@router.callback_query(MenuActions.filter(F.action == "toggle_all_alerts"))
+async def cb_toggle_all_alerts(callback: CallbackQuery):
+    products = list_products(callback.message.chat.id)
+    if not products:
+        await safe_answer(callback, "No products to toggle", show_alert=True)
+        return
+    
+    all_enabled = all(p['alerts_enabled'] for p in products)
+    new_state = not all_enabled
+    
+    toggle_all_alerts(callback.message.chat.id, new_state)
+    
+    await safe_answer(callback, f"All alerts {'enabled' if new_state else 'disabled'}!", show_alert=True)
+    await cb_notification_settings(callback)
+
+
+@router.callback_query(MenuActions.filter(F.action == "export"))
+async def cb_export(callback: CallbackQuery):
+    products = list_products(callback.message.chat.id)
+    
+    if not products:
+        await safe_answer(callback, "No products to export", show_alert=True)
+        await safe_edit(callback.message, "⚙️ Settings", reply_markup=settings_menu())
+        return
+    
+    # Create CSV-like text export
+    export_text = "📤 <b>Exported Products List</b>\n\n"
+    export_text += f"Total Products: {len(products)}\n"
+    export_text += f"Export Date: {dt.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+    export_text += "─" * 40 + "\n\n"
+    
+    for i, prod in enumerate(products, 1):
+        title = prod['title'] if prod['title'] else "No title"
+        price = f"£{prod['last_price']:.2f}" if prod['last_price'] is not None else "n/a"
+        folder = prod.get('folder_name', 'Uncategorized')
+        alerts = "ON" if prod['alerts_enabled'] else "OFF"
+        
+        export_text += f"<b>{i}. {html.escape(title[:40])}</b>\n"
+        export_text += f"   ASIN: {prod['asin']}\n"
+        export_text += f"   Price: {price}\n"
+        export_text += f"   Folder: {folder}\n"
+        export_text += f"   Alerts: {alerts}\n"
+        export_text += f"   URL: {prod['url']}\n\n"
+    
+    await safe_answer(callback, "Products exported!", show_alert=True)
+    await callback.message.answer(export_text)
+    await safe_edit(callback.message, "⚙️ Settings", reply_markup=settings_menu())
+
+
+@router.callback_query(MenuActions.filter(F.action == "clear_data"))
+async def cb_clear_data(callback: CallbackQuery):
+    # This is a destructive action - show confirmation
+    b = InlineKeyboardBuilder()
+    b.button(text="⚠️ Confirm Delete All", callback_data=MenuActions(action="confirm_clear").pack())
+    b.button(text="❌ Cancel", callback_data=MenuActions(action="settings").pack())
+    b.adjust(1)
+    
+    await safe_edit(
+        callback.message,
+        "⚠️ <b>Clear All Data</b>\n\n"
+        "This will delete ALL tracked products and folders!\n"
+        "This action cannot be undone.\n\n"
+        "Are you sure?",
+        reply_markup=b.as_markup()
+    )
+    await safe_answer(callback)
+
+
+@router.callback_query(MenuActions.filter(F.action == "confirm_clear"))
+async def cb_confirm_clear(callback: CallbackQuery):
+    from app.core.db import execute
+    
+    # Delete all user's data
+    execute("DELETE FROM products WHERE chat_id = ?", (callback.message.chat.id,))
+    execute("DELETE FROM folders WHERE chat_id = ?", (callback.message.chat.id,))
+    
+    await safe_answer(callback, "All data cleared!", show_alert=True)
+    await safe_edit(
+        callback.message,
+        "✅ All data has been cleared.\n\nYou can start fresh by adding new products!",
+        reply_markup=main_menu()
+    )
+
+
+# ================= Search Handlers =================
+
+@router.message(SearchProduct.waiting_for_name)
+async def search_by_name(message: Message, state: FSMContext):
+    search_term = message.text.strip()
+    
+    if not search_term:
+        await message.answer("Please enter a search term.", reply_markup=add_tracking_menu())
+        return
+    
+    results = search_products_by_name(message.chat.id, search_term)
+    await state.clear()
+    
+    if not results:
+        await message.answer(
+            f"🔍 No products found matching '<b>{html.escape(search_term)}</b>'",
+            reply_markup=main_menu()
+        )
+    else:
+        total = sum((r['last_price'] or 0) for r in results if r['last_price'] is not None)
+        header = f"🔍 <b>Search Results</b> ({len(results)} found)\n💰 Total: £{total:,.2f}\n\nSearch: '{html.escape(search_term)}'"
+        await message.answer(header, reply_markup=products_list(results, show_folder=True))
+
+
+@router.message(SearchProduct.waiting_for_asin)
+async def search_by_asin(message: Message, state: FSMContext):
+    asin = message.text.strip().upper()
+    
+    if not asin:
+        await message.answer("Please enter an ASIN.", reply_markup=add_tracking_menu())
+        return
+    
+    results = search_products_by_asin(message.chat.id, asin)
+    await state.clear()
+    
+    if not results:
+        await message.answer(
+            f"🔍 No products found with ASIN '<b>{asin}</b>'",
+            reply_markup=main_menu()
+        )
+    else:
+        total = sum((r['last_price'] or 0) for r in results if r['last_price'] is not None)
+        header = f"🔍 <b>Search Results</b> ({len(results)} found)\n💰 Total: £{total:,.2f}\n\nASIN: {asin}"
+        await message.answer(header, reply_markup=products_list(results, show_folder=True))
+
+
+@router.message(SearchProduct.waiting_for_price_range)
+async def filter_by_price(message: Message, state: FSMContext):
+    price_range = message.text.strip()
+    
+    # Parse price range (e.g., "10-50" or "0-100")
+    try:
+        if '-' in price_range:
+            min_price, max_price = price_range.split('-')
+            min_price = float(min_price.strip())
+            max_price = float(max_price.strip())
+        else:
+            await message.answer("Invalid format. Use format like '10-50'", reply_markup=add_tracking_menu())
+            return
+    except ValueError:
+        await message.answer("Invalid price range. Use numbers only (e.g., '10-50')", reply_markup=add_tracking_menu())
+        return
+    
+    results = filter_products_by_price_range(message.chat.id, min_price, max_price)
+    await state.clear()
+    
+    if not results:
+        await message.answer(
+            f"🔍 No products found in price range £{min_price:.2f} - £{max_price:.2f}",
+            reply_markup=main_menu()
+        )
+    else:
+        total = sum((r['last_price'] or 0) for r in results if r['last_price'] is not None)
+        header = f"🔍 <b>Price Filter Results</b> ({len(results)} found)\n💰 Total: £{total:,.2f}\n\nRange: £{min_price:.2f} - £{max_price:.2f}"
+        await message.answer(header, reply_markup=products_list(results, show_folder=True))
 
 
 @router.callback_query(ProductActions.filter(F.action == "back_to_list"))

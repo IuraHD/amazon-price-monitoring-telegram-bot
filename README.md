@@ -10,6 +10,7 @@ Professional Telegram bot for tracking Amazon product prices with intelligent fo
 - **Manual refresh** – Update all prices on-demand with one click
 - **Price history graphs** – Beautiful matplotlib charts showing trends over time
 - **Multi-currency support** – Handles £, €, $, and other currencies with comma/dot decimals
+- **Price trend analytics** – See products with recent price drops or increases
 
 ### 🗂️ Folder Organization
 - **Create custom folders** with names and emojis to organize your tracked products
@@ -19,16 +20,36 @@ Professional Telegram bot for tracking Amazon product prices with intelligent fo
 
 ### 🔔 Notifications & Alerts
 - **Real-time price change alerts** (configurable per product)
+- **Bulk alert management** – Enable/disable notifications for all products at once
 - **Minimum delta threshold** (£0.01) to avoid spam
 - **Direction indicators** (↑/↓) with old price, new price, and delta
 - **Auto-refresh graphs** sent with each notification
 
+### 🔍 Search & Filter
+- **Search by product name** – Find products by title with case-insensitive matching
+- **Search by ASIN** – Quickly locate specific products by Amazon identifier
+- **Price range filter** – Show only products within your specified price range
+- **Smart results display** – Search results include total value and product counts
+
+### 📊 Statistics & Analytics
+- **Product overview** – Total tracked products, items with prices, and aggregate value
+- **Alert status** – See how many products have notifications enabled
+- **Price trends** – View recent price drops and increases
+- **Top movers** – Identify products with the biggest price changes
+
 ### 🎯 User-Friendly Interface
+- **Enhanced main menu** – Organized 2x2 grid layout for easy navigation
 - **Product name and clickable URL** displayed in detail view
 - **Beautiful inline keyboard menus** with emojis
 - **Intuitive navigation** with smart back buttons
 - **FSM-based flows** for smooth user experience
 - **Clean chat management** (auto-deletes old graphs)
+- **Comprehensive help** – Built-in help menu explaining all features
+
+### 💾 Data Management
+- **Export functionality** – Export all tracked products with complete details
+- **Data clearing** – Option to remove all data with confirmation prompt
+- **Bulk operations** – Manage multiple products efficiently
 
 ### ⚡ Performance
 - **Async HTTP fetching** (aiohttp) with retry/backoff and 3 attempts
@@ -73,7 +94,11 @@ python -m app.bot.bot
 - **➕ Add Product** – Start tracking a new Amazon product
 - **📂 My Folders** – Manage your folder organization
 - **📦 All Products** – View all tracked products with total price
-- **🔄 Refresh All Prices** – Manually update all prices immediately
+- **🔄 Refresh All** – Manually update all prices immediately
+- **📊 Statistics** – View product statistics and price trends
+- **🔍 Search** – Search products by name, ASIN, or filter by price
+- **⚙️ Settings** – Manage notifications and export data
+- **ℹ️ Help** – View detailed help and feature information
 
 ## 📱 Workflows
 
@@ -96,6 +121,46 @@ When viewing a product:
 - **🔄 Refresh Price** – Manually check for price updates
 - **📂 Move to Folder** – Organize product into a different folder
 - **🗑️ Remove** – Stop tracking this product
+
+### Viewing Statistics
+1. Click **Statistics** from the main menu
+2. View overview: total products, total value, alerts enabled
+3. See recent price drops and increases
+4. Identify best deals and trends in your tracked products
+
+### Search & Filter
+1. Click **Search** from the main menu
+2. Choose search method:
+   - **Search by Name** – Find products containing specific text
+   - **Search by ASIN** – Locate products by Amazon Standard Identification Number
+   - **Filter by Price** – Show products within a price range (e.g., "10-50")
+3. View matching products with total value
+
+### Settings & Export
+1. Click **Settings** from the main menu
+2. **Notification Settings** – Enable/disable alerts for all products at once
+3. **Export Products** – Get a formatted list of all tracked products with details
+4. **Clear All Data** – Remove all tracked products and folders (with confirmation)
+
+## 🗺️ Menu Structure
+
+```
+Main Menu
+├── ➕ Add Product → Choose Folder → Enter URL
+├── 📂 My Folders → View/Create/Delete Folders
+├── 📦 All Products → View All → Product Details
+├── 🔄 Refresh All → Update All Prices
+├── 📊 Statistics → View Trends & Overview
+├── 🔍 Search
+│   ├── 🔤 Search by Name
+│   ├── 🏷️ Search by ASIN
+│   └── 💰 Filter by Price
+├── ⚙️ Settings
+│   ├── 🔔 Notification Settings → Toggle All Alerts
+│   ├── 📤 Export Products → Get Formatted List
+│   └── 🗑️ Clear All Data → Confirm Delete
+└── ℹ️ Help → Feature Guide
+```
 
 ## ⚙️ Configuration
 
@@ -159,10 +224,28 @@ Found a bug or have a feature request? Please open an issue on GitHub.
 
 Built with ❤️ for smart Amazon shoppers
 
-## Extensibility Ideas
-- Target price alerts per product
+## ✅ Recent Enhancements
+
+### Menu Design Improvements
+- **Enhanced main menu** with 2x2 grid layout for better visual organization
+- **New Statistics view** showing product overview and price trends
+- **Comprehensive Help section** with feature explanations
+- **Settings menu** for managing preferences and data
+
+### New Features Added
+- ✅ **Search by product name** – Find products quickly by title
+- ✅ **Search by ASIN** – Locate specific products by identifier
+- ✅ **Price range filtering** – Filter products by price
+- ✅ **Bulk alert toggle** – Enable/disable all notifications at once
+- ✅ **Product export** – Export all tracked products with details
+- ✅ **Statistics dashboard** – View product counts, total value, and trends
+- ✅ **Price trend analysis** – See recent price drops and increases
+- ✅ **Clear all data** option with confirmation
+
+## Future Extensibility Ideas
+- Target price alerts per product (notify when price drops below threshold)
 - Price drop percentage thresholds
-- Export price history to CSV
+- Export price history to CSV format
 - Webhook mode for better scalability
 - Admin dashboard with statistics
 - Share folders between users
