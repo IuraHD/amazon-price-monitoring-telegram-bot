@@ -1,0 +1,24 @@
+[project]
+name = "amazon-price-monitor"
+version = "0.2.0"
+description = "Telegram price tracking for Amazon UK"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "aiogram>=3.20,<4", "aiohttp>=3.11,<4", "beautifulsoup4>=4.13,<5",
+  "python-dotenv>=1.0,<2", "matplotlib>=3.9,<4", "regex>=2024.11",
+  "tzdata>=2025.1"
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<9", "pytest-asyncio>=0.24,<2", "ruff>=0.11,<1"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

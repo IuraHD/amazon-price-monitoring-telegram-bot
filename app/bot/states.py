@@ -1,9 +1,12 @@
-from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.state import State, StatesGroup
 
-class AddTracking(StatesGroup):
-    choosing_folder = State()
-    waiting_for_url = State()
 
-class CreateFolder(StatesGroup):
-    waiting_for_name = State()
-    waiting_for_emoji = State()
+class Input(StatesGroup):
+    url = State()
+    folder_name = State()
+    folder_emoji = State()
+    rename = State()
+    emoji = State()
+    target = State()
+    percentage = State()
+    search = State()

@@ -1,171 +1,168 @@
-# Amazon Price Monitor Bot 🛒
+# Amazon Price Monitor
 
-Professional Telegram bot for tracking Amazon product prices with intelligent folder organization and automatic notifications.
+A Telegram bot for tracking Amazon UK prices. I use Python, aiogram, aiohttp,
+Beautiful Soup, SQLite, and matplotlib. Product prices are shared between checks;
+each chat has its own subscriptions, folders, and alert preferences.
 
-## ✨ Features
+## Features
 
-### 📊 Smart Price Tracking
-- **Automatic price checks every 10 minutes** with instant notifications on changes
-- **Discounted price detection** – always captures the lowest available price (deals, vouchers, AOD offers)
-- **Manual refresh** – Update all prices on-demand with one click
-- **Price history graphs** – Beautiful matplotlib charts showing trends over time
-- **Multi-currency support** – Handles £, €, $, and other currencies with comma/dot decimals
+- Track a product by URL, including supported Amazon short links.
+- Organize subscriptions into folders; rename folders, change their emoji, or
+  move products without losing alert settings.
+- Browse product names with pagination, search, sorting, and recorded-price totals.
+- Check prices manually or on a schedule, with a shared per-product cooldown.
+- Receive alerts for any change, drops only, a target-price crossing, or a minimum
+  percentage change. Optional stock alerts require an explicit unavailable-to-
+  available transition.
+- Defer notifications during quiet hours in a chosen timezone.
+- View 7-, 30-, or 90-day charts and export 90 days of observations as CSV.
 
-### 🗂️ Folder Organization
-- **Create custom folders** with names and emojis to organize your tracked products
-- **Categorize products** during adding or move them later between folders
-- **View totals per folder** – See total price across products in each category
-- **Track uncategorized items** separately for flexibility
+## What a price means
 
-### 🔔 Notifications & Alerts
-- **Real-time price change alerts** (configurable per product)
-- **Minimum delta threshold** (£0.01) to avoid spam
-- **Direction indicators** (↑/↓) with old price, new price, and delta
-- **Auto-refresh graphs** sent with each notification
+The bot reads Amazon product-page HTML; it does not use an Amazon product API.
+It verifies the ASIN and reads recognized primary price elements, including the
+selected one-time-purchase accordion. Ambiguous, blocked, and unrecognized pages
+are recorded as failures rather than guessed prices.
 
-### 🎯 User-Friendly Interface
-- **Product name and clickable URL** displayed in detail view
-- **Beautiful inline keyboard menus** with emojis
-- **Intuitive navigation** with smart back buttons
-- **FSM-based flows** for smooth user experience
-- **Clean chat management** (auto-deletes old graphs)
+Prices are GBP amounts stored as integer pence. Shipping, vouchers, Prime-only
+prices, and subscription discounts are not calculated. Seller information is
+shown when available, but a seller is not pinned across checks. Check the offer
+on Amazon before buying.
 
-### ⚡ Performance
-- **Async HTTP fetching** (aiohttp) with retry/backoff and 3 attempts
-- **Smart marketplace canonicalization** to UK domain for consistency
-- **Random user-agent rotation** to avoid blocks
-- **Rate limiting** (60s per product) with minimal delta threshold
-- **Strikethrough price filtering** – Ignores list prices, only captures actual prices
-- **Graceful shutdown** handling
+Links from other marketplaces require confirmation before tracking the same ASIN
+on Amazon UK. This is not currency conversion. A product card shows the last
+recorded price, last successful check, last attempt, and current check status.
+List totals sum recorded prices, exclude unknown prices, and identify items that
+need another check; they are not live basket quotes.
 
-## 🚀 Quick Start
+## Setup
 
-### Prerequisites
-- Python 3.11+
-- Telegram Bot Token (get from [@BotFather](https://t.me/botfather))
+Use Python 3.11–3.13 and a Telegram token from [@BotFather](https://t.me/BotFather).
+The tested dependency versions are recorded in `uv.lock`.
 
-### Installation
+```sh
+git clone https://github.com/IuraHD/amazon-price-monitoring-telegram-bot.git
+cd amazon-price-monitoring-telegram-bot
+uv sync --locked --no-dev --python 3.12
+```
 
-```powershell
-# Clone the repository
-git clone https://github.com/yourusername/amazon-price-monitor-bot.git
-cd amazon-price-monitor-bot
+Copy `.env.example` to `.env` and set the token. Then run:
 
-# Create virtual environment
+```sh
+uv run --locked --no-dev python -m app.bot.bot
+```
+
+Alternatively, create and activate a virtual environment, then install the
+hash-locked requirements:
+
+```sh
 python -m venv .venv
-.venv\Scripts\Activate.ps1  # Windows PowerShell
-# OR: source .venv/bin/activate  # Linux/Mac
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# Edit .env and add your TELEGRAM_BOT_TOKEN
-
-# Run the bot
+# PowerShell: .\.venv\Scripts\Activate.ps1
+# Linux/macOS: source .venv/bin/activate
+python -m pip install --require-hashes -r requirements.txt
 python -m app.bot.bot
 ```
 
-## 🎮 Usage
+The bot uses long polling. Run one polling process per token.
 
-### Main Menu Options
-- **➕ Add Product** – Start tracking a new Amazon product
-- **📂 My Folders** – Manage your folder organization
-- **📦 All Products** – View all tracked products with total price
-- **🔄 Refresh All Prices** – Manually update all prices immediately
+## Configuration
 
-## 📱 Workflows
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Required | Telegram token; never commit it. |
+| `TELEGRAM_PRIMARY_CHAT_ID` | Unset | Restrict every interaction and scheduled delivery to one chat. Signed group IDs are supported. |
+| `PRICE_REFRESH_MINUTES` | `10` | Interval after each completed successful check; integer from 5 to 1440. Failed checks wait at least 15 minutes before scheduled retry. |
+| `DATABASE_PATH` | `app/data/tracker.db` | SQLite file; use an absolute shared path for release-based deployments. |
 
-### Adding a Product
-1. Click **Add Product**
-2. Choose a folder (or create a new one, or select "No Folder")
-3. Send the Amazon product URL
-4. Receive confirmation with current price and price history graph
+Invalid configuration stops startup rather than silently disabling restrictions.
+Private chats are supported by default. Group use requires that group's ID in
+`TELEGRAM_PRIMARY_CHAT_ID`; only group administrators can manage tracking.
 
-### Managing Folders
-1. Click **My Folders**
-2. View all folders with product counts
-3. Create new folders with custom names and emojis
-4. View products within each folder
-5. Delete folders (products remain, moved to uncategorized)
+## Commands and navigation
 
-### Product Management
-When viewing a product:
-- **🔔/🔕 Toggle Alerts** – Turn price change notifications on/off
-- **🔄 Refresh Price** – Manually check for price updates
-- **📂 Move to Folder** – Organize product into a different folder
-- **🗑️ Remove** – Stop tracking this product
+Send `/start`, then **Add product**, paste a URL, and select or create a folder.
+Adding a duplicate opens the existing subscription without changing its settings.
+Use **Move** to change its folder. Product and folder deletion require confirmation.
+Use `/cancel` to abandon an input step.
 
-## ⚙️ Configuration
+Open a product to refresh it, set its target, mute alerts, change alert rules,
+view history, or export CSV. A target alert fires when a previously observed price
+crosses from above the target to at or below it. Muting cancels queued alerts.
+A percentage filter compares consecutive successful observations.
 
-Create a `.env` file (copy from `.env.example`):
+To defer notifications overnight:
 
-```env
-TELEGRAM_BOT_TOKEN=123456:ABCDEFYourBotToken
-
-# Optional settings:
-TELEGRAM_PRIMARY_CHAT_ID=123456789  # Restrict bot to specific chat (leave empty for no restriction)
-PRICE_REFRESH_MINUTES=10  # Background price check interval (default: 10 minutes)
+```text
+/quiet 22 8 Europe/London
+/quiet off
 ```
 
-## 🗄️ Architecture
+The timezone follows daylight-saving changes. Deferred alerts resume after quiet
+hours; this is not a daily digest. Delivery retries survive restarts. Blocked
+chats are paused until `/start` is received again. Telegram timeouts can leave
+acceptance uncertain, so retry delivery cannot guarantee exactly-once messages.
 
-### Project Structure
+Manual and scheduled checks share a 60-second cooldown and a database lease to
+avoid overlapping requests. Manual **Refresh my products** is scoped to the
+current chat. A shared product's new observation can notify its other subscribers
+according to their own rules. Results report changed, unchanged, failed, and
+skipped counts.
+
+## Storage and upgrades
+
+The schema separates `catalog`, `subscriptions`, `observations`, `folders`,
+`preferences`, and a durable notification `outbox`. Foreign keys are enabled on
+every connection. Removing a subscription does not remove another chat's data;
+product history is deleted when the last subscription is removed.
+
+The first start against the original database creates a timestamped `.bak` file
+before an atomic migration. It preserves subscription IDs, folders, alert flags,
+and valid linked history. Broken folder assignments become Uncategorized;
+orphaned history remains in the backup. Legacy prices are marked unverified until
+a successful new check, and the first new observation does not trigger a price
+change alert. Legacy timestamps without a timezone are interpreted as UTC.
+
+Keep an additional backup before deployment. See [deployment and rollback](docs/deployment.md).
+
+## Development
+
+```sh
+uv sync --locked
+uv run ruff check app tests
+uv run ruff format --check app tests
+uv run pytest -q
 ```
-app/
-├── bot/
-│   ├── bot.py          # Main router and handlers
-│   ├── keyboards.py    # Inline keyboard builders
-│   └── states.py       # FSM states
-├── core/
-│   ├── config.py       # Environment configuration
-│   ├── db.py          # SQLite connection and schema
-│   ├── folders.py     # Folder CRUD operations
-│   └── products.py    # Product and price history operations
-├── utils/
-│   ├── fetch.py       # Amazon scraping (price, title, ASIN)
-│   └── graph.py       # Price history chart generation
-└── data/
-    └── tracker.db     # SQLite database (auto-created)
+
+Tests cover migrations, ownership, parser failures, request validation, quiet
+hours, delivery retries, concurrency, and Telegram interaction flows with mocked
+network calls. CI checks Python 3.11, 3.12, and 3.13 on Linux and Windows.
+
+After changing dependencies, regenerate both lock outputs:
+
+```sh
+uv lock
+uv export --no-dev --format requirements-txt --output-file requirements.txt
 ```
 
-### Database Schema
-- **folders** – User-created categories with emoji customization
-- **products** – Tracked items with ASIN, URL, title, price, folder assignment
-- **price_history** – Timestamped price snapshots for trending
+## Layout
 
-## 🛠️ Key Technologies
-- **aiogram 3.x** – Modern async Telegram Bot framework
-- **aiohttp** – Async HTTP client for fast concurrent fetching
-- **BeautifulSoup4** – HTML parsing for Amazon scraping
-- **matplotlib** – Price trend graph generation
-- **SQLite** – Lightweight embedded database
-- **structlog** – Structured logging for production monitoring
+```text
+app/bot/           Telegram handlers, keyboards, and input states
+app/core/db.py     Schema, connections, and legacy migration
+app/core/products.py  Chat-scoped subscriptions, observations, and alert rules
+app/core/folders.py    Chat-scoped folder operations
+app/core/service.py   Scheduled checks and durable notification delivery
+app/utils/fetch.py    Validated URLs, bounded HTTP requests, and offer parsing
+app/utils/graph.py    Off-thread PNG chart rendering
+app/health.py         Read-only database health report
+```
 
-## 📝 License
-
-MIT License - feel free to use and modify!
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 🐛 Issues
-
-Found a bug or have a feature request? Please open an issue on GitHub.
-
----
-
-Built with ❤️ for smart Amazon shoppers
-
-## Extensibility Ideas
-- Target price alerts per product
-- Price drop percentage thresholds
-- Export price history to CSV
-- Webhook mode for better scalability
-- Admin dashboard with statistics
-- Share folders between users
+Limits are 200 tracked products and 100 folders per chat. Charts preserve endpoints
+and price extremes within a 200-point display limit; exports include all samples
+in their date range. No observation is invented for a failed check. Amazon can
+still change its markup or block automated requests; those cases require parser
+maintenance and are visible as check failures.
 
 ## License
-Personal use.
+
+[MIT](LICENSE).

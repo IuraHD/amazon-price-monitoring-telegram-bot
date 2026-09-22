@@ -1,266 +1,231 @@
-from typing import Optional
 import asyncio
-import random
+import ipaddress
 import re
-from bs4 import BeautifulSoup
+import socket
+from dataclasses import dataclass
+from decimal import Decimal
+from urllib.parse import urljoin, urlparse
+
 import aiohttp
-from urllib.parse import urlparse
+from aiohttp.resolver import ThreadedResolver
+from bs4 import BeautifulSoup
 
-_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-]
-
-def _headers() -> dict:
-    return {
-        "User-Agent": random.choice(_USER_AGENTS),
-        "Accept-Language": "en-GB,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Connection": "close",
-    }
-
-
-async def fetch_price(url: str, session: aiohttp.ClientSession | None = None) -> Optional[float]:
-    attempts = 0
-    last_exc: Exception | None = None
-    while attempts < 3:
-        attempts += 1
-        try:
-            # Prefer a stable marketplace to avoid regional price variance
-            target_url = url
-            try:
-                parsed = urlparse(url)
-                host = parsed.netloc.lower()
-                if "amazon.co.uk" not in host:
-                    # Try to canonicalize to UK marketplace using ASIN
-                    asin = await resolve_asin(url, session=session)
-                    if asin and len(asin) >= 8:
-                        target_url = f"https://www.amazon.co.uk/dp/{asin}"
-            except Exception:
-                target_url = url
-
-            s = session or aiohttp.ClientSession()
-            async with s.get(target_url, headers=_headers(), timeout=aiohttp.ClientTimeout(total=25)) as resp:
-                if resp.status >= 400:
-                    raise RuntimeError(f"HTTP {resp.status}")
-                text = await resp.text()
-            if session is None:
-                await s.close()
-            soup = BeautifulSoup(text, "html.parser")
-            price = _extract_price(soup)
-            if price is not None:
-                return price
-        except Exception as e:
-            last_exc = e
-            await asyncio.sleep(1 * attempts)
-    return None
+MARKETS = {
+    "amazon.co.uk",
+    "amazon.com",
+    "amazon.de",
+    "amazon.fr",
+    "amazon.it",
+    "amazon.es",
+    "amazon.ca",
+    "amazon.com.au",
+    "amazon.co.jp",
+    "amazon.in",
+    "amazon.pl",
+    "amazon.nl",
+    "amazon.se",
+    "amazon.com.be",
+    "amazon.ie",
+}
+SHORT_HOSTS = {"amzn.to", "amzn.eu", "amzn.com", "amzn.co"}
+ASIN = re.compile(r"^[A-Z0-9]{10}$")
+MAX_BYTES = 8_000_000
 
 
-def _extract_price(soup: BeautifulSoup) -> Optional[float]:
-    # First, try to find all eligible prices within the main price container and pick the lowest
-    main_container = (
-        soup.select_one("#corePrice_feature_div")
-        or soup.select_one("#apex_desktop")
-        or soup.select_one("#ppd")
-        or soup.select_one("#centerCol")
-    )
-    candidates: list[float] = []
-    if main_container is not None:
-        for el in main_container.select("span.a-price:not(.a-text-price) span.a-offscreen"):
-            if _is_struckthrough(el):
-                continue
-            txt = el.get_text(strip=True)
-            p = _parse_price_text(txt)
-            if p is not None:
-                candidates.append(p)
-
-    # Also consider the AOD (All Offers) ingress price if present (often the lowest offer)
-    aod_el = soup.select_one("#aod-ingress-link .a-price .a-offscreen, #dynamic-aod-ingress-box .a-price .a-offscreen")
-    if aod_el and not _is_struckthrough(aod_el):
-        p = _parse_price_text(aod_el.get_text(strip=True))
-        if p is not None:
-            candidates.append(p)
-
-    if candidates:
-        try:
-            return min(candidates)
-        except Exception:
-            pass
-
-    # Prefer discounted/"price to pay" selectors first, then fall back to regular price.
-    preferred_selectors = [
-        "#priceblock_dealprice",
-        "#priceblock_saleprice",
-        "span.priceToPay span.a-offscreen",
-        "#corePrice_feature_div span.a-price[data-a-color='price'] span.a-offscreen",
-        "#corePrice_feature_div span.a-offscreen",
-        "#corePrice_desktop span.a-offscreen",
-        "#apex_desktop span.a-price[data-a-color='price'] span.a-offscreen",
-        "#apex_desktop span.a-offscreen",
-        "span.a-price[data-a-color='price'] span.a-offscreen",
-        "div[data-feature-name='corePrice'] span.a-offscreen",
-    ]
-    fallback_selectors = [
-        "#priceblock_ourprice",
-        "#priceblock_price",
-        "span.a-price span.a-offscreen",
-    ]
-
-    for sel in preferred_selectors + fallback_selectors:
-        el = soup.select_one(sel)
-        if el:
-            # Skip if this element is inside a strikethrough/list price container
-            if _is_struckthrough(el):
-                continue
-            txt = el.get_text(strip=True)
-            if txt:
-                p = _parse_price_text(txt)
-                if p is not None:
-                    return p
-
-    # As a broader fallback, scan common price containers for any a-offscreen values
-    for el in soup.select("#corePrice_feature_div .a-offscreen, #apex_desktop .a-offscreen, .a-price .a-offscreen"):
-        if _is_struckthrough(el):
-            continue
-        txt = el.get_text(strip=True)
-        p = _parse_price_text(txt)
-        if p is not None:
-            return p
-
-    # Ultimate fallback: scan all spans for any currency/number looking text
-    for span in soup.find_all("span"):
-        if _is_struckthrough(span):
-            continue
-        txt = span.get_text(strip=True)
-        if any(sym in txt for sym in ("£", "€", "$", "zł", "PLN", "₹", "¥")) or re.search(r"\d[\d\.,\s]*", txt):
-            p = _parse_price_text(txt)
-            if p is not None:
-                return p
-    return None
-
-    # legacy sync removed
-    return None
+class InvalidProduct(ValueError):
+    pass
 
 
-def _parse_price_text(text: str) -> Optional[float]:
-    # Normalize whitespace and NBSPs
-    t = text.replace("\xa0", " ").strip()
-    # Remove currency codes/symbols but keep digits and separators for parsing logic
-    # Keep digits, commas, dots and spaces only
-    cleaned = "".join(ch for ch in t if ch.isdigit() or ch in ",. ")
-    if not cleaned:
-        return None
-    # Remove spaces (thousand separators in some locales)
-    cleaned = cleaned.replace(" ", "")
-    # Determine decimal separator as the last occurrence of ',' or '.'
-    last_dot = cleaned.rfind('.')
-    last_comma = cleaned.rfind(',')
-    last_idx = max(last_dot, last_comma)
-    if last_idx != -1:
-        dec_sep = cleaned[last_idx]
-        int_part = cleaned[:last_idx].replace('.', '').replace(',', '')
-        frac_part = cleaned[last_idx + 1:]
-        if not int_part and not frac_part:
-            return None
-        num_str = f"{int_part}.{frac_part}" if frac_part else int_part
-    else:
-        # No obvious decimal separator, assume whole number
-        num_str = cleaned.replace('.', '').replace(',', '')
+@dataclass(frozen=True)
+class ProductLink:
+    asin: str
+    url: str
+    converted: bool = False
+
+
+@dataclass(frozen=True)
+class Offer:
+    status: str
+    price_pence: int | None = None
+    title: str | None = None
+    detail: str = ""
+    availability: str = "unknown"
+    seller: str | None = None
+
+
+def validate_url(value: str) -> str:
+    value = value.strip()
+    if len(value) > 2048 or any(ord(c) < 33 for c in value) or "\\" in value:
+        raise InvalidProduct("Send one Amazon product URL, without surrounding text.")
+    if "://" not in value:
+        value = "https://" + value
     try:
-        return float(num_str)
-    except Exception:
-        return None
-
-
-def _is_struckthrough(el) -> bool:
-    try:
-        # Walk up a few levels to see if any ancestor marks this as list/strike price
-        node = el
-        depth = 0
-        while node is not None and depth < 6:
-            classes = set(node.get("class", [])) if hasattr(node, 'get') else set()
-            if (
-                ("a-text-price" in classes)  # typical strikethrough container
-                or ("priceBlockStrikePriceString" in classes)
-                or node.get("data-a-strike") is not None
-                or node.get("aria-hidden") == "true" and ("a-offscreen" in classes)
-            ):
-                return True
-            node = getattr(node, 'parent', None)
-            depth += 1
-    except Exception:
-        return False
-    return False
+        p = urlparse(value)
+        host = p.hostname or ""
+        bare = host[4:] if host.startswith("www.") else host
+        if p.scheme not in {"https", "http"} or p.username or p.password or p.port not in (None, 80, 443):
+            raise ValueError
+        if bare not in MARKETS and host not in SHORT_HOSTS:
+            raise ValueError
+    except ValueError as exc:
+        raise InvalidProduct("Use an Amazon product URL or an amzn.to / amzn.eu short link.") from exc
+    # Always use TLS, including links originally copied with http.
+    return p._replace(scheme="https", netloc=host, fragment="").geturl()
 
 
 def extract_asin(url: str) -> str:
-    parts = url.split("/")
-    if "dp" in parts:
-        i = parts.index("dp")
-        if i + 1 < len(parts):
-            return parts[i + 1][:10]
-    if "product" in parts:
-        i = parts.index("product")
-        if i + 1 < len(parts):
-            return parts[i + 1][:10]
-    return url  # fallback
+    p = urlparse(validate_url(url))
+    match = re.search(r"/(?:dp|gp/product|gp/aw/d)/([A-Za-z0-9]{10})(?:[/?]|$)", p.path + "/")
+    if not match:
+        raise InvalidProduct("The link does not identify a product. Copy its /dp/ASIN link from Amazon.")
+    return match.group(1).upper()
 
 
-async def resolve_asin(url: str, session: aiohttp.ClientSession | None = None) -> str:
-    """Resolve short amazon URLs like amzn.eu/d/... or amzn.to/... to extract ASIN.
-    Falls back to original extract if redirect fails.
-    """
-    parsed = urlparse(url)
-    host = parsed.netloc.lower()
-    # Only attempt redirect resolution for known short hosts
-    short_hosts = {"amzn.to", "amzn.eu", "amzn.co", "amzn.com"}
-    if host in short_hosts or host.startswith("amzn."):
+class PublicResolver(ThreadedResolver):
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        addresses = await super().resolve(host, port, family)
+        if not addresses or any(not ipaddress.ip_address(a["host"]).is_global for a in addresses):
+            raise OSError("Refusing a non-public destination")
+        return addresses
+
+
+def create_session():
+    return aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(resolver=PublicResolver(), limit=4),
+        timeout=aiohttp.ClientTimeout(total=20),
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36",
+            "Accept-Language": "en-GB,en;q=0.9",
+        },
+        cookie_jar=aiohttp.DummyCookieJar(),
+        trust_env=False,
+    )
+
+
+async def resolve_link(value: str, session) -> ProductLink:
+    url = validate_url(value)
+    for _ in range(6):
+        host = urlparse(url).hostname
+        if host not in SHORT_HOSTS:
+            asin = extract_asin(url)
+            return ProductLink(
+                asin, f"https://www.amazon.co.uk/dp/{asin}", host not in {"amazon.co.uk", "www.amazon.co.uk"}
+            )
+        async with session.get(url, allow_redirects=False) as response:
+            if response.status in {301, 302, 303, 307, 308} and response.headers.get("Location"):
+                url = validate_url(urljoin(url, response.headers["Location"]))
+            else:
+                raise InvalidProduct(
+                    "This short link could not be resolved. Send the full Amazon product URL."
+                )
+    raise InvalidProduct("Too many redirects. Send the full Amazon product URL.")
+
+
+def parse_gbp(text: str) -> int | None:
+    # A single amount, never a percentage, rating, unit price, or pair of amounts.
+    match = re.fullmatch(
+        r"\s*(?:£|GBP\s*)\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})?)\s*", text.replace("\xa0", " ")
+    )
+    if not match:
+        return None
+    value = int(Decimal(match.group(1).replace(",", "")) * 100)
+    return value if 0 < value <= 100_000_000 else None
+
+
+def parse_offer(markup: str, asin: str) -> Offer:
+    soup = BeautifulSoup(markup, "html.parser")
+    if (
+        soup.select_one('#captchacharacters, form[action*="validateCaptcha"]')
+        or "enter the characters you see below" in soup.get_text(" ", strip=True).lower()
+    ):
+        return Offer("blocked", detail="Amazon returned a verification page")
+    identity = soup.select_one('input#ASIN, input[name="ASIN"]')
+    if not identity or identity.get("value", "").upper() != asin:
+        return Offer("unrecognized", detail="Could not verify the requested product variant")
+    title_node = soup.select_one("#productTitle")
+    title = title_node.get_text(" ", strip=True)[:300] if title_node else None
+    if not title:
+        return Offer("unrecognized", detail="Product title missing")
+    availability_node = soup.select_one("#availability")
+    availability_text = availability_node.get_text(" ", strip=True).lower() if availability_node else ""
+    if any(
+        s in availability_text for s in ("currently unavailable", "temporarily out of stock", "out of stock")
+    ):
+        return Offer(
+            "unavailable",
+            title=title,
+            detail="Amazon reports this product unavailable",
+            availability="unavailable",
+        )
+    selectors = [
+        '#buyBoxAccordion [id^="newAccordionRow"].a-accordion-active .apex-pricetopay-value .a-offscreen',
+        "#corePrice_feature_div .priceToPay .a-offscreen",
+        "#corePriceDisplay_desktop_feature_div .priceToPay .a-offscreen",
+        "#apex_desktop .priceToPay .a-offscreen",
+        '#corePrice_feature_div .a-price[data-a-color="price"] .a-offscreen',
+        "#priceblock_dealprice, #priceblock_saleprice, #priceblock_ourprice",
+    ]
+    for selector in selectors:
+        values = set()
+        for el in soup.select(selector):
+            ancestors = list(el.parents)
+            if any(
+                parent.get("id", "").startswith(("sns-", "usedAccordionRow"))
+                or parent.get("id") == "subscriptionPrice"
+                or (
+                    parent.get("id", "").startswith("newAccordionRow")
+                    and "a-accordion-active" not in parent.get("class", [])
+                )
+                for parent in ancestors
+            ):
+                continue
+            if any(
+                "a-text-price" in parent.get("class", []) or parent.has_attr("data-a-strike")
+                for parent in [el, *list(el.parents)[:5]]
+            ):
+                continue
+            price = parse_gbp(el.get_text(" ", strip=True))
+            if price is not None:
+                values.add(price)
+        if len(values) > 1:
+            return Offer("ambiguous", title=title, detail="Multiple primary prices; no price recorded")
+        if values:
+            seller_node = soup.select_one("#sellerProfileTriggerId")
+            seller = seller_node.get_text(" ", strip=True)[:120] if seller_node else None
+            stock = "available" if "in stock" in availability_text else "unknown"
+            return Offer(
+                "ok",
+                values.pop(),
+                title,
+                "Displayed UK price; shipping and conditional discounts excluded",
+                stock,
+                seller,
+            )
+    return Offer("unrecognized", title=title, detail="No unambiguous primary GBP offer found")
+
+
+async def fetch_offer(asin: str, session) -> Offer:
+    if not ASIN.fullmatch(asin):
+        return Offer("invalid", detail="Invalid legacy ASIN; remove and add a valid product URL")
+    url = f"https://www.amazon.co.uk/dp/{asin}"
+    for attempt in range(3):
         try:
-            s = session or aiohttp.ClientSession()
-            async with s.get(url, headers=_headers(), allow_redirects=True, timeout=15) as resp:
-                final_url = str(resp.url)
-            if session is None:
-                await s.close()
-            asin = extract_asin(final_url)
-            return asin
-        except Exception:
-            return extract_asin(url)
-    return extract_asin(url)
-
-
-async def fetch_title(url: str, session: aiohttp.ClientSession | None = None) -> Optional[str]:
-    attempts = 0
-    while attempts < 3:
-        attempts += 1
-        try:
-            target_url = url
-            try:
-                parsed = urlparse(url)
-                host = parsed.netloc.lower()
-                if "amazon.co.uk" not in host:
-                    asin = await resolve_asin(url, session=session)
-                    if asin and len(asin) >= 8:
-                        target_url = f"https://www.amazon.co.uk/dp/{asin}"
-            except Exception:
-                target_url = url
-            s = session or aiohttp.ClientSession()
-            async with s.get(target_url, headers=_headers(), timeout=aiohttp.ClientTimeout(total=25)) as resp:
-                if resp.status >= 400:
-                    raise RuntimeError(f"HTTP {resp.status}")
-                text = await resp.text()
-            if session is None:
-                await s.close()
-            soup = BeautifulSoup(text, "html.parser")
-            sel = soup.select_one('#productTitle') or soup.select_one('h1#title span') or soup.select_one('span#title')
-            if not sel:
-                og = soup.select_one('meta[property="og:title"]')
-                if og and og.get('content'):
-                    return og.get('content').strip()
-            if sel:
-                t = sel.get_text(strip=True)
-                if t:
-                    return t
-        except Exception:
-            await asyncio.sleep(1 * attempts)
-    return None
+            async with session.get(url, allow_redirects=False) as response:
+                if response.status in {403, 429, 503}:
+                    return Offer("blocked", detail=f"Amazon HTTP {response.status}; retry deferred")
+                if response.status >= 500 and attempt < 2:
+                    await asyncio.sleep(attempt + 1)
+                    continue
+                if response.status != 200:
+                    return Offer("http_error", detail=f"Amazon HTTP {response.status}; no price recorded")
+                body = bytearray()
+                async for chunk in response.content.iter_chunked(65536):
+                    body.extend(chunk)
+                    if len(body) > MAX_BYTES:
+                        return Offer("unrecognized", detail="Page exceeds the response size limit")
+                return await asyncio.to_thread(parse_offer, body.decode("utf-8", errors="replace"), asin)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+            if attempt == 2:
+                return Offer("network_error", detail="Could not reach Amazon after three attempts")
+            await asyncio.sleep(attempt + 1)
+    return Offer("network_error", detail="Request failed")
